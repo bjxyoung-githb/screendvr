@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScreenDVR</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1f232c; --line:#2a2f3a;
+    --text:#e8eaef; --muted:#8b93a3; --accent:#4f8cff; --rec:#ff4d4f; --ok:#3ecf8e; --warn:#f5a623;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}
+  header h1{font-size:18px;margin:0;font-weight:650;letter-spacing:.2px}
+  .badge{font-size:11px;padding:2px 7px;border-radius:999px;background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
+  .spacer{flex:1}
+  #storage{font-size:12px;color:var(--muted)}
+  main{max-width:1200px;margin:0 auto;padding:16px}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+  h2{font-size:15px;margin:0 0 12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  label.f{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+  select,input[type=number],input[type=text]{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:inherit;font-size:14px}
+  input[type=number]{width:90px}
+  label.chk{display:flex;gap:6px;align-items:center;font-size:14px}
+  button{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font:inherit;font-size:14px;cursor:pointer;white-space:nowrap}
+  button:hover{border-color:var(--accent)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button.rec{background:var(--rec);border-color:var(--rec);color:#fff;font-weight:600}
+  button.live{color:var(--rec);border-color:var(--rec)}
+  .screen-wrap{position:relative;background:#000;border-radius:10px;overflow:hidden;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center}
+  .screen-wrap video{width:100%;height:100%;object-fit:contain;background:#000}
+  .placeholder{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);text-align:center;padding:16px;gap:6px}
+  .overlay{position:absolute;top:10px;left:10px;display:flex;gap:8px;align-items:center}
+  .pill{font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px;background:rgba(0,0,0,.65);border:1px solid rgba(255,255,255,.15)}
+  .pill.live{color:#fff;background:var(--rec);border-color:var(--rec)}
+  .pill.shift{color:#000;background:var(--warn);border-color:var(--warn)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--rec);display:inline-block;margin-right:5px;animation:blink 1.2s infinite}
+  @keyframes blink{50%{opacity:.25}}
+  .controls{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .stat{font-variant-numeric:tabular-nums;color:var(--muted);font-size:13px}
+  .hidden{display:none!important}
+  #library{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
+  .thumb{aspect-ratio:16/9;background:#000 center/contain no-repeat;position:relative;cursor:pointer}
+  .thumb .dur{position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.75);font-size:12px;padding:1px 6px;border-radius:4px}
+  .thumb .tag{position:absolute;left:6px;top:6px;font-size:11px;padding:1px 6px;border-radius:4px;background:var(--warn);color:#000;font-weight:700}
+  .card .body{padding:10px;display:flex;flex-direction:column;gap:6px}
+  .card .title{font-weight:600;word-break:break-word}
+  .card .meta{font-size:12px;color:var(--muted)}
+  .card .actions{display:flex;gap:6px;flex-wrap:wrap}
+  .card .actions button{padding:5px 9px;font-size:13px}
+  .empty{color:var(--muted);padding:20px;text-align:center}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;z-index:20;padding:16px}
+  .modal .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;width:min(1100px,100%);max-height:100%;overflow:auto;padding:14px}
+  .modal video{width:100%;max-height:70vh;background:#000;border-radius:8px}
+  .marks{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .marks button{font-size:12px;padding:4px 8px}
+  .note{font-size:12px;color:var(--muted);margin-top:10px}
+  kbd{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:0 5px;font-size:11px}
+  @media (max-width:600px){ main{padding:10px} section{padding:12px} }
+</style>
+</head>
+<body>
+<header>
+  <h1>ScreenDVR</h1>
+  <span class="badge" id="ver"></span>
+  <span class="spacer"></span>
+  <span id="storage"></span>
+</header>
+
+<main>
+  <section id="unsupported" class="hidden">
+    <h2>Not supported here</h2>
+    <p>This browser can't capture the screen. Use Chrome or Edge on a desktop/laptop computer (Windows, Mac, Linux, ChromeOS). Phones and tablets don't allow screen capture from web pages.</p>
+  </section>
+
+  <section id="setup">
+    <h2>Record</h2>
+    <div class="row">
+      <label class="f">Resolution
+        <select id="optRes">
+          <option value="720">720p</option>
+          <option value="1080" selected>1080p</option>
+          <option value="0">Native</option>
+        </select>
+      </label>
+      <label class="f">Frame rate
+        <select id="optFps">
+          <option value="15">15 fps</option>
+          <option value="30" selected>30 fps</option>
+          <option value="60">60 fps</option>
+        </select>
+      </label>
+      <label class="f">Quality
+        <select id="optBitrate">
+          <option value="1500000">Low (~11 MB/min)</option>
+          <option value="4000000" selected>Standard (~30 MB/min)</option>
+          <option value="8000000">High (~60 MB/min)</option>
+        </select>
+      </label>
+      <label class="f">Auto-stop after (min, 0 = off)
+        <input type="number" id="optAutoStop" min="0" step="5" value="0">
+      </label>
+      <label class="f">Keep at most (GB)
+        <input type="number" id="optMaxGB" min="1" step="1" value="20">
+      </label>
+      <label class="chk"><input type="checkbox" id="optAudio" checked> Capture audio</label>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button class="rec" id="btnStart">● Start recording</button>
+    </div>
+    <p class="note">You'll pick a whole screen, a window, or a browser tab. For sound, choose a <b>browser tab</b> (tick "Share tab audio") or, on Windows/ChromeOS, a whole screen with "Share system audio". Leave this page open while recording.</p>
+  </section>
+
+  <section id="dvr" class="hidden">
+    <h2>Now recording</h2>
+    <div class="screen-wrap">
+      <video id="screen" playsinline></video>
+      <div class="overlay">
+        <span class="pill live" id="modePill">LIVE</span>
+        <span class="pill"><span class="dot"></span><span id="recTime">0:00</span></span>
+      </div>
+    </div>
+    <div class="controls">
+      <button data-dvr="back30" title="Back 30 s">⏪ 30</button>
+      <button data-dvr="back10" title="Back 10 s (J / ←)">⏪ 10</button>
+      <button data-dvr="toggle" id="btnPlayPause" title="Pause / play (Space)">⏸ Pause</button>
+      <button data-dvr="fwd10" title="Forward 10 s (L / →)">10 ⏩</button>
+      <button data-dvr="fwd30" title="Forward 30 s">30 ⏩</button>
+      <button data-dvr="live" class="live" id="btnLive" title="Jump to live">● Live</button>
+      <button data-dvr="mark" title="Bookmark this moment (M)">🔖 Mark</button>
+      <span class="spacer"></span>
+      <span class="stat" id="recStats"></span>
+      <button class="primary" data-dvr="stop">■ Stop &amp; save</button>
+    </div>
+    <div class="marks" id="liveMarks"></div>
+    <p class="note">Pausing or rewinding doesn't interrupt the recording — it keeps capturing in the background, just like a TV DVR. <kbd>Space</kbd> pause · <kbd>J</kbd>/<kbd>L</kbd> or <kbd>←</kbd>/<kbd>→</kbd> skip 10 s · <kbd>M</kbd> mark</p>
+  </section>
+
+  <section>
+    <h2>Recordings</h2>
+    <div id="library"></div>
+  </section>
+</main>
+
+<div class="modal hidden" id="player">
+  <div class="box">
+    <div class="row" style="margin-bottom:10px">
+      <strong id="playerTitle" style="flex:1"></strong>
+      <label class="f" style="flex-direction:row;align-items:center;gap:6px">Speed
+        <select id="playerSpeed">
+          <option value="0.5">0.5×</option><option value="1" selected>1×</option>
+          <option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option>
+        </select>
+      </label>
+      <button data-p="back30">⏪ 30</button>
+      <button data-p="back10">⏪ 10</button>
+      <button data-p="fwd10">10 ⏩</button>
+      <button data-p="fwd30">30 ⏩</button>
+      <button data-p="close">✕ Close</button>
+    </div>
+    <video id="pVideo" controls playsinline></video>
+    <div class="marks" id="playerMarks"></div>
+  </div>
+</div>
+
+<script>
+const BUILD_VERSION = '1.0.0';
+document.getElementById('ver').textContent = 'v' + BUILD_VERSION;
+
+const $ = id => document.getElementById(id);
+const once = (el, ev) => new Promise(r => el.addEventListener(ev, r, { once: true }));
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function fmt(sec){
+  sec = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), s = sec%60;
+  return (h ? h + ':' + String(m).padStart(2,'0') : m) + ':' + String(s).padStart(2,'0');
+}
+function fmtBytes(b){
+  if (b < 1024*1024) return (b/1024).toFixed(0) + ' KB';
+  if (b < 1024*1024*1024) return (b/1024/1024).toFixed(1) + ' MB';
+  return (b/1024/1024/1024).toFixed(2) + ' GB';
+}
+
+/* ---------- Settings (remembered per browser) ---------- */
+const OPTS = ['optRes','optFps','optBitrate','optAutoStop','optMaxGB','optAudio'];
+function loadOpts(){
+  try {
+    const saved = JSON.parse(localStorage.getItem('screendvr-opts') || '{}');
+    OPTS.forEach(k => { if (k in saved) { const el = $(k); el.type === 'checkbox' ? el.checked = saved[k] : el.value = saved[k]; } });
+  } catch(e){}
+}
+function saveOpts(){
+  try {
+    const o = {}; OPTS.forEach(k => { const el = $(k); o[k] = el.type === 'checkbox' ? el.checked : el.value; });
+    localStorage.setItem('screendvr-opts', JSON.stringify(o));
+  } catch(e){}
+}
+OPTS.forEach(k => $(k).addEventListener('change', saveOpts));
+loadOpts();
+
+/* ---------- IndexedDB ---------- */
+let db;
+function openDB(){
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('screendvr', 1);
+    r.onupgradeneeded = () => {
+      const d = r.result;
+      d.createObjectStore('recordings', { keyPath: 'id' });
+      d.createObjectStore('chunks', { keyPath: ['recId','seq'] });
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+function tx(store, mode, fn){
+  return new Promise((res, rej) => {
+    const t = db.transaction(store, mode);
+    const req = fn(t.objectStore(store));
+    let result;
+    if (req) req.onsuccess = () => { result = req.result; };
+    t.oncomplete = () => res(result);
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error);
+  });
+}
+const chunkRange = id => IDBKeyRange.bound([id, 0], [id, Number.MAX_SAFE_INTEGER]);
+const putRec = rec => tx('recordings', 'readwrite', s => s.put(rec));
+const getRec = id => tx('recordings', 'readonly', s => s.get(id));
+const allRecs = () => tx('recordings', 'readonly', s => s.getAll());
+const getChunks = id => tx('chunks', 'readonly', s => s.getAll(chunkRange(id)));
+async function deleteRec(id){
+  await tx('chunks', 'readwrite', s => s.delete(chunkRange(id)));
+  await tx('recordings', 'readwrite', s => s.delete(id));
+}
+
+async function buildBlob(id, mime){
+  const chunks = await getChunks(id);
+  return new Blob(chunks.map(c => c.blob), { type: mime });
+}
+
+/* MediaRecorder WebM files have no duration header; this makes the browser scan
+   the file so the timeline and seeking work. */
+async function fixDuration(video){
+  if (isFinite(video.duration)) return;
+  video.currentTime = 1e101;
+  await once(video, 'timeupdate');
+  video.currentTime = 0;
+}
+
+async function loadInto(video, id, mime){
+  const blob = await buildBlob(id, mime);
+  if (video._url) URL.revokeObjectURL(video._url);
+  video.srcObject = null;
+  video._url = URL.createObjectURL(blob);
+  video.src = video._url;
+  await once(video, 'loadedmetadata');
+  await fixDuration(video);
+}
+
+/* ---------- Storage ---------- */
+async function updateStorage(){
+  try {
+    if (navigator.storage && navigator.storage.estimate){
+      const { usage, quota } = await navigator.storage.estimate();
+      $('storage').textContent = fmtBytes(usage) + ' used of ' + fmtBytes(quota) + ' available';
+    }
+  } catch(e){}
+}
+async function enforceCap(){
+  const maxBytes = (parseFloat($('optMaxGB').value) || 20) * 1024*1024*1024;
+  const recs = (await allRecs()).filter(r => r.status !== 'recording' && !r.keep).sort((a,b) => a.created - b.created);
+  let total = recs.reduce((s,r) => s + (r.size||0), 0);
+  while (total > maxBytes && recs.length > 1){
+    const oldest = recs.shift();
+    total -= oldest.size || 0;
+    await deleteRec(oldest.id);
+  }
+}
+
+/* ---------- Recording ---------- */
+const S = { stream:null, recorder:null, recId:null, mime:'', start:0, seq:0, size:0,
+            marks:[], writes:Promise.resolve(), mode:'live', refreshing:false, timer:null, lastMeta:0 };
+const screen = $('screen');
+
+function pickMime(){
+  const list = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm','video/mp4'];
+  return list.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
+}
+const elapsed = () => (Date.now() - S.start) / 1000;
+
+async function startRecording(){
+  const res = parseInt($('optRes').value, 10);
+  const fps = parseInt($('optFps').value, 10);
+  const video = { frameRate: fps };
+  if (res) video.height = { ideal: res };
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video, audio: $('optAudio').checked,
+      systemAudio: 'include', surfaceSwitching: 'include', selfBrowserSurface: 'exclude'
+    });
+  } catch(e){ return; } // user cancelled the picker
+
+  S.mime = pickMime();
+  S.stream = stream; S.start = Date.now(); S.seq = 0; S.size = 0; S.marks = []; S.mode = 'live';
+  S.recId = 'r' + S.start;
+  S.writes = Promise.resolve();
+
+  const label = (stream.getVideoTracks()[0].label || 'Screen').replace(/^(screen|window|web-contents-media-stream):\S*/i,'').trim();
+  const rec = { id: S.recId, title: label && label.length > 2 ? label : 'Recording', created: S.start,
+                mime: S.mime, durationMs: 0, size: 0, marks: [], status: 'recording', thumb: '' };
+  await putRec(rec);
+
+  S.recorder = new MediaRecorder(stream, { mimeType: S.mime || undefined, videoBitsPerSecond: parseInt($('optBitrate').value, 10) });
+  S.recorder.ondataavailable = e => {
+    if (!e.data || !e.data.size) return;
+    const seq = S.seq++; S.size += e.data.size;
+    const recId = S.recId, blob = e.data;
+    S.writes = S.writes.then(() => tx('chunks', 'readwrite', s => s.put({ recId, seq, blob }))).catch(err => console.error(err));
+  };
+  S.recorder.onstop = finishRecording;
+  stream.getVideoTracks()[0].addEventListener('ended', stopRecording); // user clicked "Stop sharing"
+  S.recorder.start(1000);
+
+  goLive();
+  $('setup').classList.add('hidden');
+  $('dvr').classList.remove('hidden');
+  renderLiveMarks();
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch(e){}
+
+  // thumbnail from the first frames
+  setTimeout(async () => {
+    try {
+      const c = document.createElement('canvas'); const v = screen;
+      if (!v.videoWidth) return;
+      c.width = 320; c.height = Math.round(320 * v.videoHeight / v.videoWidth);
+      c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+      const r = await getRec(S.recId); if (r){ r.thumb = c.toDataURL('image/jpeg', 0.6); await putRec(r); }
+    } catch(e){}
+  }, 1500);
+
+  S.timer = setInterval(tick, 500);
+}
+
+function stopRecording(){
+  if (S.recorder && S.recorder.state !== 'inactive') S.recorder.stop();
+}
+
+async function finishRecording(){
+  clearInterval(S.timer);
+  const resumeAt = S.mode === 'shifted' ? screen.currentTime : null;
+  if (S.stream) S.stream.getTracks().forEach(t => t.stop());
+  await S.writes;
+  const r = await getRec(S.recId);
+  if (r){
+    Object.assign(r, { status: 'complete', durationMs: Date.now() - S.start, size: S.size, marks: S.marks });
+    await putRec(r);
+  }
+  const id = S.recId;
+  screen.pause(); screen.srcObject = null; screen.removeAttribute('src'); screen.load();
+  S.stream = null; S.recorder = null; S.recId = null; S.mode = 'live';
+  $('dvr').classList.add('hidden');
+  $('setup').classList.remove('hidden');
+  await enforceCap();
+  await renderLibrary();
+  if (resumeAt !== null) openPlayer(id, resumeAt); // you were watching behind live — keep going
+}
+
+async function tick(){
+  if (!S.recorder) return;
+  const el = elapsed();
+  $('recTime').textContent = fmt(el);
+  $('recStats').textContent = fmtBytes(S.size);
+  if (S.mode === 'shifted'){
+    const lag = el - screen.currentTime;
+    $('modePill').textContent = (screen.paused ? 'PAUSED ' : '') + '−' + fmt(lag) + ' behind live';
+  }
+  const auto = parseFloat($('optAutoStop').value) || 0;
+  if (auto > 0 && el >= auto * 60) stopRecording();
+  if (Date.now() - S.lastMeta > 10000){ // keep metadata fresh so a crash can be recovered
+    S.lastMeta = Date.now();
+    const r = await getRec(S.recId);
+    if (r){ r.durationMs = Date.now() - S.start; r.size = S.size; r.marks = S.marks; putRec(r); }
+  }
+}
+
+/* ---------- Live / time-shift ---------- */
+function setModeUI(){
+  const live = S.mode === 'live';
+  $('modePill').className = 'pill ' + (live ? 'live' : 'shift');
+  if (live) $('modePill').textContent = 'LIVE';
+  $('btnLive').disabled = live;
+  $('btnPlayPause').textContent = (!live && screen.paused) ? '▶ Play' : '⏸ Pause';
+  document.querySelectorAll('[data-dvr="fwd10"],[data-dvr="fwd30"]').forEach(b => b.disabled = live);
+}
+function goLive(){
+  S.mode = 'live';
+  screen.pause();
+  if (screen._url){ URL.revokeObjectURL(screen._url); screen._url = null; }
+  screen.removeAttribute('src');
+  screen.srcObject = S.stream;
+  screen.muted = true; // the real audio is already playing on your computer
+  screen.play().catch(()=>{});
+  setModeUI();
+}
+async function enterShift(target, play){
+  S.refreshing = true;
+  await S.writes;
+  screen.muted = false;
+  await loadInto(screen, S.recId, S.mime);
+  S.mode = 'shifted';
+  screen.currentTime = Math.max(0, Math.min(target, screen.duration - 0.5));
+  if (play) await screen.play().catch(()=>{}); else screen.pause();
+  S.refreshing = false;
+  setModeUI();
+}
+async function refreshShift(){ // pull in newly recorded footage while watching behind live
+  if (S.refreshing) return;
+  const t = screen.currentTime, playing = !screen.paused;
+  await enterShift(t, playing);
+}
+screen.addEventListener('timeupdate', () => {
+  if (S.mode !== 'shifted' || S.refreshing || !S.recorder) return;
+  const remaining = screen.duration - screen.currentTime;
+  if (remaining < 1.5){
+    if (elapsed() - screen.currentTime < 4) goLive(); // caught up
+    else refreshShift();
+  }
+});
+screen.addEventListener('ended', () => { if (S.mode === 'shifted' && S.recorder) refreshShift(); });
+screen.addEventListener('play', setModeUI);
+screen.addEventListener('pause', setModeUI);
+
+async function dvr(action){
+  if (!S.recorder) return;
+  const live = S.mode === 'live';
+  switch(action){
+    case 'back10': case 'back30': {
+      const n = action === 'back10' ? 10 : 30;
+      if (live) await enterShift(elapsed() - n, true);
+      else screen.currentTime = Math.max(0, screen.currentTime - n);
+      break;
+    }
+    case 'fwd10': case 'fwd30': {
+      if (live) return;
+      const n = action === 'fwd10' ? 10 : 30;
+      const target = screen.currentTime + n;
+      if (elapsed() - target < 3) goLive();
+      else if (target > screen.duration - 1) await enterShift(target, !screen.paused);
+      else screen.currentTime = target;
+      break;
+    }
+    case 'toggle':
+      if (live) await enterShift(elapsed(), false);   // DVR pause
+      else if (screen.paused) screen.play(); else screen.pause();
+      break;
+    case 'live': goLive(); break;
+    case 'mark': {
+      const t = live ? elapsed() : screen.currentTime;
+      S.marks.push({ t, label: 'Mark ' + (S.marks.length + 1) });
+      renderLiveMarks();
+      break;
+    }
+    case 'stop': stopRecording(); break;
+  }
+  setModeUI();
+}
+function renderLiveMarks(){
+  $('liveMarks').innerHTML = S.marks.map((m,i) =>
+    `<button data-dvrmark="${i}">🔖 ${esc(m.label)} · ${fmt(m.t)}</button>`).join('');
+}
+$('dvr').addEventListener('click', async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.dvr) return dvr(b.dataset.dvr);
+  if (b.dataset.dvrmark !== undefined){
+    const m = S.marks[+b.dataset.dvrmark];
+    if (S.mode === 'live') await enterShift(m.t, true); else screen.currentTime = m.t;
+  }
+});
+$('btnStart').addEventListener('click', startRecording);
+
+/* ---------- Library ---------- */
+async function renderLibrary(){
+  const recs = (await allRecs()).filter(r => r.id !== S.recId).sort((a,b) => b.created - a.created);
+  const lib = $('library');
+  if (!recs.length){ lib.innerHTML = '<div class="empty">No recordings yet.</div>'; updateStorage(); return; }
+  lib.innerHTML = recs.map(r => `
+    <div class="card">
+      <div class="thumb" data-act="play" data-id="${r.id}" style="${r.thumb ? `background-image:url('${r.thumb}')` : ''}">
+        ${r.status === 'recovered' ? '<span class="tag">RECOVERED</span>' : ''}
+        <span class="dur">${fmt((r.durationMs||0)/1000)}</span>
+      </div>
+      <div class="body">
+        <div class="title">${r.keep ? '📌 ' : ''}${esc(r.title)}</div>
+        <div class="meta">${new Date(r.created).toLocaleString()} · ${fmtBytes(r.size||0)}${r.marks && r.marks.length ? ' · ' + r.marks.length + ' marks' : ''}</div>
+        <div class="actions">
+          <button data-act="play" data-id="${r.id}">▶ Play</button>
+          <button data-act="rename" data-id="${r.id}">Rename</button>
+          <button data-act="keep" data-id="${r.id}">${r.keep ? 'Unpin' : 'Pin'}</button>
+          <button data-act="download" data-id="${r.id}">Download</button>
+          <button data-act="delete" data-id="${r.id}">Delete</button>
+        </div>
+      </div>
+    </div>`).join('');
+  updateStorage();
+}
+$('library').addEventListener('click', async e => {
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  const id = el.dataset.id, r = await getRec(id); if (!r) return;
+  switch(el.dataset.act){
+    case 'play': openPlayer(id, 0); break;
+    case 'rename': {
+      const t = prompt('Name this recording:', r.title);
+      if (t && t.trim()){ r.title = t.trim(); await putRec(r); renderLibrary(); }
+      break;
+    }
+    case 'keep': r.keep = !r.keep; await putRec(r); renderLibrary(); break;
+    case 'download': {
+      const blob = await buildBlob(id, r.mime);
+      const ext = (r.mime || '').includes('mp4') ? 'mp4' : 'webm';
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = (r.title || 'recording').replace(/[\\/:*?"<>|]+/g, '_').slice(0,80) + '.' + ext;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      break;
+    }
+    case 'delete':
+      if (confirm('Delete "' + r.title + '"? This cannot be undone.')){ await deleteRec(id); renderLibrary(); }
+      break;
+  }
+});
+
+/* ---------- Player ---------- */
+const pv = $('pVideo');
+async function openPlayer(id, startAt){
+  const r = await getRec(id); if (!r) return;
+  $('playerTitle').textContent = r.title;
+  $('playerMarks').innerHTML = (r.marks || []).map(m =>
+    `<button data-pt="${m.t}">🔖 ${esc(m.label)} · ${fmt(m.t)}</button>`).join('');
+  $('player').classList.remove('hidden');
+  await loadInto(pv, id, r.mime);
+  pv.playbackRate = parseFloat($('playerSpeed').value);
+  pv.currentTime = startAt || 0;
+  pv.play().catch(()=>{});
+}
+function closePlayer(){
+  pv.pause();
+  if (pv._url){ URL.revokeObjectURL(pv._url); pv._url = null; }
+  pv.removeAttribute('src'); pv.load();
+  $('player').classList.add('hidden');
+}
+$('player').addEventListener('click', e => {
+  if (e.target === $('player')) return closePlayer();
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.pt !== undefined){ pv.currentTime = parseFloat(b.dataset.pt); pv.play(); return; }
+  const skip = { back30:-30, back10:-10, fwd10:10, fwd30:30 }[b.dataset.p];
+  if (skip) pv.currentTime = Math.max(0, Math.min(pv.duration, pv.currentTime + skip));
+  if (b.dataset.p === 'close') closePlayer();
+});
+$('playerSpeed').addEventListener('change', e => { pv.playbackRate = parseFloat(e.target.value); });
+
+/* ---------- Keyboard ---------- */
+document.addEventListener('keydown', e => {
+  if (e.target.matches('input,select,textarea')) return;
+  const k = e.key.toLowerCase();
+  if (!$('player').classList.contains('hidden')){
+    if (k === 'escape') closePlayer();
+    else if (k === ' ' && e.target !== pv){ e.preventDefault(); pv.paused ? pv.play() : pv.pause(); }
+    else if (k === 'j') pv.currentTime -= 10;
+    else if (k === 'l') pv.currentTime += 10;
+    return;
+  }
+  if (!S.recorder) return;
+  const map = { ' ':'toggle', j:'back10', arrowleft:'back10', l:'fwd10', arrowright:'fwd10', m:'mark' };
+  if (map[k]){ e.preventDefault(); dvr(map[k]); }
+});
+
+/* ---------- Boot ---------- */
+(async function init(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia || !window.MediaRecorder){
+    $('unsupported').classList.remove('hidden');
+    $('setup').classList.add('hidden');
+  }
+  db = await openDB();
+  // A recording left "in progress" means the page was closed mid-recording — keep what was saved.
+  for (const r of await allRecs()){
+    if (r.status === 'recording'){
+      const chunks = await getChunks(r.id);
+      if (!chunks.length){ await deleteRec(r.id); continue; }
+      r.status = 'recovered';
+      r.size = chunks.reduce((s,c) => s + c.blob.size, 0);
+      r.durationMs = Math.max(r.durationMs || 0, chunks.length * 1000);
+      await putRec(r);
+    }
+  }
+  renderLibrary();
+})();
+</script>
+</body>
+</html>
