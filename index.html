@@ -60,6 +60,25 @@
   .marks button{font-size:12px;padding:4px 8px}
   .note{font-size:12px;color:var(--muted);margin-top:10px}
   kbd{background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:0 5px;font-size:11px}
+  /* Trim editor */
+  .ed-video-wrap{position:relative;background:#000;border-radius:8px;overflow:hidden}
+  .ed-video-wrap video{width:100%;max-height:55vh;display:block;background:#000;cursor:pointer}
+  .ed-busy{position:absolute;inset:0;background:rgba(0,0,0,.72);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:12px;text-align:center}
+  .ed-busy.compact{top:auto;flex-direction:row;flex-wrap:wrap;background:rgba(0,0,0,.65)}
+  .bar{width:min(320px,80%);height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+  .bar>div{height:100%;width:0;background:var(--accent);transition:width .2s}
+  .timeline{position:relative;height:64px;margin:16px 14px 4px;background:#000;border-radius:6px;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none}
+  .timeline canvas{position:absolute;inset:0;width:100%;height:100%;border-radius:6px}
+  .tl-dim{position:absolute;top:0;bottom:0;background:rgba(0,0,0,.68);pointer-events:none}
+  .tl-sel{position:absolute;top:0;bottom:0;border-top:3px solid var(--warn);border-bottom:3px solid var(--warn);pointer-events:none}
+  .tl-handle{position:absolute;top:-4px;bottom:-4px;width:14px;background:var(--warn);cursor:ew-resize;touch-action:none;z-index:2}
+  .tl-handle::after{content:'';position:absolute;left:4px;top:50%;width:2px;height:20px;margin-top:-10px;border-left:2px solid rgba(0,0,0,.55);border-right:2px solid rgba(0,0,0,.55);box-sizing:content-box;width:2px}
+  #hStart{transform:translateX(-14px);border-radius:5px 0 0 5px}
+  #hEnd{border-radius:0 5px 5px 0}
+  .tl-head{position:absolute;top:-7px;bottom:-7px;width:2px;margin-left:-1px;background:#fff;box-shadow:0 0 3px #000;pointer-events:none;z-index:3}
+  .tl-mark{position:absolute;bottom:3px;width:3px;height:14px;margin-left:-1px;background:var(--accent);border-radius:1px;pointer-events:none;z-index:1}
+  .ed-controls{margin-top:10px}
+  .note button{font-size:12px;padding:3px 8px;margin-left:4px}
   @media (max-width:600px){ main{padding:10px} section{padding:12px} }
 </style>
 </head>
@@ -160,6 +179,7 @@
       <button data-p="back10">⏪ 10</button>
       <button data-p="fwd10">10 ⏩</button>
       <button data-p="fwd30">30 ⏩</button>
+      <button data-p="trim">✂ Trim</button>
       <button data-p="close">✕ Close</button>
     </div>
     <video id="pVideo" controls playsinline></video>
@@ -167,8 +187,50 @@
   </div>
 </div>
 
+<div class="modal hidden" id="editor">
+  <div class="box">
+    <div class="row" style="margin-bottom:10px">
+      <strong style="flex:1">✂ Trim: <span id="edTitle"></span></strong>
+      <button data-e="close">✕ Cancel</button>
+    </div>
+    <div class="ed-video-wrap">
+      <video id="edVideo" playsinline></video>
+      <div class="ed-busy hidden" id="edBusy">
+        <div id="edBusyText"></div>
+        <div class="bar"><div id="edBar"></div></div>
+        <button data-e="abort" id="edAbort" class="hidden">Stop</button>
+      </div>
+    </div>
+    <div class="timeline" id="tl">
+      <canvas id="tlStrip"></canvas>
+      <div id="tlMarks"></div>
+      <div class="tl-dim" id="tlDimL"></div>
+      <div class="tl-dim" id="tlDimR"></div>
+      <div class="tl-sel" id="tlSel"></div>
+      <div class="tl-handle" id="hStart" data-h="start" title="Drag to set the start"></div>
+      <div class="tl-handle" id="hEnd" data-h="end" title="Drag to set the end"></div>
+      <div class="tl-head" id="tlHead"></div>
+    </div>
+    <div class="row ed-controls">
+      <button data-e="play" id="edPlay" title="Play / pause (Space)">▶</button>
+      <span class="stat" id="edTime">0:00.0 / 0:00</span>
+      <button data-e="in" title="Set start at the playhead (I)">[ Set start</button>
+      <button data-e="out" title="Set end at the playhead (O)">Set end ]</button>
+      <button data-e="preview" title="Play just the kept part (P)">▶ Preview trim</button>
+      <span class="spacer"></span>
+      <span class="stat" id="edSummary"></span>
+    </div>
+    <p class="note" id="edNote"></p>
+    <p class="note">Drag the yellow handles, or play to a spot and press <kbd>I</kbd> (start) / <kbd>O</kbd> (end). Click the strip to jump. <kbd>←</kbd>/<kbd>→</kbd> 1 s · <kbd>J</kbd>/<kbd>L</kbd> 10 s</p>
+    <div class="row" style="justify-content:flex-end;margin-top:8px">
+      <button data-e="replace" id="edReplace">Replace original</button>
+      <button class="primary" data-e="saveCopy" id="edSave">Save as new copy</button>
+    </div>
+  </div>
+</div>
+
 <script>
-const BUILD_VERSION = '1.0.0';
+const BUILD_VERSION = '1.1.0';
 document.getElementById('ver').textContent = 'v' + BUILD_VERSION;
 
 const $ = id => document.getElementById(id);
@@ -312,10 +374,13 @@ async function startRecording(){
 
   const label = (stream.getVideoTracks()[0].label || 'Screen').replace(/^(screen|window|web-contents-media-stream):\S*/i,'').trim();
   const rec = { id: S.recId, title: label && label.length > 2 ? label : 'Recording', created: S.start,
-                mime: S.mime, durationMs: 0, size: 0, marks: [], status: 'recording', thumb: '' };
+                mime: S.mime, bitrate: parseInt($('optBitrate').value, 10),
+                durationMs: 0, size: 0, marks: [], status: 'recording', thumb: '' };
   await putRec(rec);
 
-  S.recorder = new MediaRecorder(stream, { mimeType: S.mime || undefined, videoBitsPerSecond: parseInt($('optBitrate').value, 10) });
+  // A keyframe every second gives the trim editor a clean, lossless cut point every second.
+  S.recorder = new MediaRecorder(stream, { mimeType: S.mime || undefined, videoBitsPerSecond: rec.bitrate,
+                                           videoKeyFrameIntervalDuration: 1000 });
   S.recorder.ondataavailable = e => {
     if (!e.data || !e.data.size) return;
     const seq = S.seq++; S.size += e.data.size;
@@ -499,6 +564,7 @@ async function renderLibrary(){
         <div class="meta">${new Date(r.created).toLocaleString()} · ${fmtBytes(r.size||0)}${r.marks && r.marks.length ? ' · ' + r.marks.length + ' marks' : ''}</div>
         <div class="actions">
           <button data-act="play" data-id="${r.id}">▶ Play</button>
+          <button data-act="trim" data-id="${r.id}">✂ Trim</button>
           <button data-act="rename" data-id="${r.id}">Rename</button>
           <button data-act="keep" data-id="${r.id}">${r.keep ? 'Unpin' : 'Pin'}</button>
           <button data-act="download" data-id="${r.id}">Download</button>
@@ -513,6 +579,7 @@ $('library').addEventListener('click', async e => {
   const id = el.dataset.id, r = await getRec(id); if (!r) return;
   switch(el.dataset.act){
     case 'play': openPlayer(id, 0); break;
+    case 'trim': openEditor(id); break;
     case 'rename': {
       const t = prompt('Name this recording:', r.title);
       if (t && t.trim()){ r.title = t.trim(); await putRec(r); renderLibrary(); }
@@ -539,6 +606,7 @@ $('library').addEventListener('click', async e => {
 const pv = $('pVideo');
 async function openPlayer(id, startAt){
   const r = await getRec(id); if (!r) return;
+  pv._recId = id;
   $('playerTitle').textContent = r.title;
   $('playerMarks').innerHTML = (r.marks || []).map(m =>
     `<button data-pt="${m.t}">🔖 ${esc(m.label)} · ${fmt(m.t)}</button>`).join('');
@@ -561,13 +629,461 @@ $('player').addEventListener('click', e => {
   const skip = { back30:-30, back10:-10, fwd10:10, fwd30:30 }[b.dataset.p];
   if (skip) pv.currentTime = Math.max(0, Math.min(pv.duration, pv.currentTime + skip));
   if (b.dataset.p === 'close') closePlayer();
+  if (b.dataset.p === 'trim'){ const id = pv._recId; closePlayer(); openEditor(id); }
 });
 $('playerSpeed').addEventListener('change', e => { pv.playbackRate = parseFloat(e.target.value); });
+
+/* ---------- WebM reader + lossless cutter ----------
+   Recordings are WebM files. Instead of re-encoding (slow, lossy), a trim copies the
+   original compressed frames between the cut points into a new file, starting on a
+   keyframe. It also writes a duration and a seek index so the result seeks instantly. */
+const EB = { EBML:0x1A45DFA3, Segment:0x18538067, SeekHead:0x114D9B74, Seek:0x4DBB, SeekID:0x53AB, SeekPosition:0x53AC,
+  Info:0x1549A966, TimecodeScale:0x2AD7B1, Duration:0x4489, MuxingApp:0x4D80, WritingApp:0x5741,
+  Tracks:0x1654AE6B, TrackEntry:0xAE, TrackNumber:0xD7, TrackType:0x83,
+  Cluster:0x1F43B675, Timecode:0xE7, SimpleBlock:0xA3, BlockGroup:0xA0, Block:0xA1, ReferenceBlock:0xFB,
+  Cues:0x1C53BB6B, CuePoint:0xBB, CueTime:0xB3, CueTrackPositions:0xB7, CueTrack:0xF7, CueClusterPosition:0xF1 };
+const LEVEL1 = new Set([EB.SeekHead, EB.Info, EB.Tracks, EB.Cluster, EB.Cues, 0x1254C367, 0x1043A770, 0x1941A469]);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const yieldUI = () => sleep(0);
+
+class BlobReader {
+  constructor(blob){ this.blob = blob; this.size = blob.size; this.start = 0; this.buf = new Uint8Array(0); }
+  async ensure(pos, n){
+    n = Math.min(n, this.size - pos);
+    if (n <= 0) return false;
+    if (pos >= this.start && pos + n <= this.start + this.buf.length) return true;
+    const end = Math.min(this.size, pos + Math.max(n, 4 << 20));
+    this.buf = new Uint8Array(await this.blob.slice(pos, end).arrayBuffer());
+    this.start = pos;
+    return true;
+  }
+  b(pos){ return this.buf[pos - this.start]; }
+  uint(pos, len){ let v = 0; for (let i = 0; i < len; i++) v = v * 256 + this.b(pos + i); return v; }
+}
+const vlen = b => { for (let l = 1; l <= 8; l++) if (b & (0x80 >> (l - 1))) return l; return 0; };
+
+async function readEl(R, pos){
+  if (!await R.ensure(pos, 12)) return null;
+  const idLen = vlen(R.b(pos));
+  if (!idLen || idLen > 4 || pos + idLen >= R.size) return null;
+  const sp = pos + idLen, s0 = R.b(sp), sLen = vlen(s0);
+  if (!sLen || sp + sLen > R.size) return null;
+  const mask = 0xFF >> sLen;
+  let size = s0 & mask, unknown = size === mask;
+  for (let i = 1; i < sLen; i++){ const x = R.b(sp + i); size = size * 256 + x; if (x !== 0xFF) unknown = false; }
+  const dataStart = sp + sLen;
+  return { id: R.uint(pos, idLen), start: pos, dataStart, size: unknown ? -1 : size, end: unknown ? -1 : dataStart + size };
+}
+async function eachChild(R, from, to, fn){
+  let p = from;
+  while (p < to){
+    const h = await readEl(R, p);
+    if (!h || h.end < 0 || h.end > to) break;
+    await fn(h);
+    p = h.end;
+  }
+}
+async function readUintEl(R, h){ await R.ensure(h.dataStart, h.size); return R.uint(h.dataStart, h.size); }
+async function blockHead(R, p){
+  await R.ensure(p, 12);
+  const l = vlen(R.b(p));
+  let track = R.b(p) & (0xFF >> l);
+  for (let i = 1; i < l; i++) track = track * 256 + R.b(p + i);
+  const tcPos = p + l;
+  let rel = (R.b(tcPos) << 8) | R.b(tcPos + 1);
+  if (rel & 0x8000) rel -= 0x10000;
+  return { track, tcPos, rel, flags: R.b(tcPos + 2) };
+}
+
+async function indexWebM(blob, onProgress){
+  const R = new BlobReader(blob);
+  const ebml = await readEl(R, 0);
+  if (!ebml || ebml.id !== EB.EBML || ebml.end < 0) throw new Error('Not a WebM recording');
+  const seg = await readEl(R, ebml.end);
+  if (!seg || seg.id !== EB.Segment) throw new Error('Damaged recording');
+  const ix = { ebmlEnd: ebml.end, scale: 1000000, tracks: null, video: 0, audio: 0, blocks: [] };
+  const segEnd = seg.end < 0 ? blob.size : Math.min(blob.size, seg.end);
+  let pos = seg.dataStart, inCluster = false, cEnd = -1, cTc = 0, nextYield = 0;
+  while (pos < segEnd){
+    const h = await readEl(R, pos);
+    if (!h) break;
+    if (inCluster && ((cEnd >= 0 && pos >= cEnd) || LEVEL1.has(h.id))) inCluster = false;
+    if (!inCluster){
+      if (h.id === EB.Cluster){ inCluster = true; cEnd = h.end; cTc = 0; pos = h.dataStart; continue; }
+      if (h.end < 0 || h.end > segEnd) break;
+      if (h.id === EB.Info){
+        await eachChild(R, h.dataStart, h.end, async c => { if (c.id === EB.TimecodeScale) ix.scale = await readUintEl(R, c); });
+      } else if (h.id === EB.Tracks){
+        ix.tracks = [h.start, h.end];
+        await eachChild(R, h.dataStart, h.end, async te => {
+          if (te.id !== EB.TrackEntry) return;
+          let num = 0, type = 0;
+          await eachChild(R, te.dataStart, te.end, async c => {
+            if (c.id === EB.TrackNumber) num = await readUintEl(R, c);
+            else if (c.id === EB.TrackType) type = await readUintEl(R, c);
+          });
+          if (type === 1 && !ix.video) ix.video = num;
+          if (type === 2 && !ix.audio) ix.audio = num;
+        });
+      }
+      pos = h.end; continue;
+    }
+    if (h.end < 0 || h.end > segEnd) break; // cut-off tail, e.g. a recovered recording
+    if (h.id === EB.Timecode) cTc = await readUintEl(R, h);
+    else if (h.id === EB.SimpleBlock){
+      const b = await blockHead(R, h.dataStart);
+      ix.blocks.push({ t: cTc + b.rel, track: b.track, key: !!(b.flags & 0x80), s: h.start, tc: b.tcPos, e: h.end });
+    } else if (h.id === EB.BlockGroup){
+      let blk = null, ref = false;
+      await eachChild(R, h.dataStart, h.end, async c => {
+        if (c.id === EB.Block) blk = await blockHead(R, c.dataStart);
+        else if (c.id === EB.ReferenceBlock) ref = true;
+      });
+      if (blk) ix.blocks.push({ t: cTc + blk.rel, track: blk.track, key: !ref, s: h.start, tc: blk.tcPos, e: h.end });
+    }
+    pos = h.end;
+    if (pos > nextYield){ nextYield = pos + (8 << 20); if (onProgress) onProgress(pos / blob.size); await yieldUI(); }
+  }
+  if (!ix.tracks || !ix.blocks.length) throw new Error('No video found in recording');
+  return ix;
+}
+
+function cat(arrs){ let n = 0; for (const a of arrs) n += a.length; const o = new Uint8Array(n); let p = 0; for (const a of arrs){ o.set(a, p); p += a.length; } return o; }
+function idB(id){ const n = id > 0xFFFFFF ? 4 : id > 0xFFFF ? 3 : id > 0xFF ? 2 : 1; const o = new Uint8Array(n); for (let i = n - 1; i >= 0; i--){ o[i] = id % 256; id = Math.floor(id / 256); } return o; }
+function sizeB(n){ const o = new Uint8Array(8); o[0] = 1; for (let i = 7; i >= 1; i--){ o[i] = n % 256; n = Math.floor(n / 256); } return o; }
+function uintB(n, len){ if (!len){ len = 1; for (let t = n; t >= 256; t = Math.floor(t / 256)) len++; } const o = new Uint8Array(len); for (let i = len - 1; i >= 0; i--){ o[i] = n % 256; n = Math.floor(n / 256); } return o; }
+const el = (id, payload) => cat([idB(id), sizeB(payload.length), payload]);
+const elUint = (id, n, len) => el(id, uintB(n, len));
+const elStr = (id, s) => el(id, new TextEncoder().encode(s));
+function elFloat(id, f){ const o = new Uint8Array(8); new DataView(o.buffer).setFloat64(0, f); return el(id, o); }
+
+/* Copy the frames from fromTick..toTick into a new WebM. The start moves back to the
+   nearest video keyframe so the file plays cleanly. Returns the new blob and the real start. */
+function remux(blob, ix, fromTick, toTick){
+  const vt = ix.video, B = ix.blocks;
+  let K = fromTick;
+  if (vt){
+    let k = null;
+    for (const b of B){
+      if (b.track !== vt || !b.key) continue;
+      if (b.t <= fromTick) k = b.t; else { if (k === null) k = b.t; break; }
+    }
+    if (k !== null) K = k;
+  }
+  const frame = Math.max(1, Math.round(33.3e6 / ix.scale));
+  const clusters = [];
+  let cur = null, last = 0, seenKey = !vt;
+  for (const b of B){
+    if (b.t < K || b.t >= toTick) continue;
+    if (b.track === vt && !seenKey){ if (!b.key) continue; seenKey = true; }
+    const nt = b.t - K;
+    const vkey = b.track === vt && b.key;
+    if (!cur || vkey || nt - cur.tc > 30000 || nt - cur.tc < -30000){
+      cur = { tc: Math.max(0, nt), parts: [], len: 0, key: vkey };
+      clusters.push(cur);
+    }
+    const rel = nt - cur.tc;
+    cur.parts.push(blob.slice(b.s, b.tc), new Uint8Array([(rel >> 8) & 0xFF, rel & 0xFF]), blob.slice(b.tc + 2, b.e));
+    cur.len += b.e - b.s;
+    if (nt > last) last = nt;
+  }
+  if (!clusters.length) throw new Error('Nothing to keep in that range');
+
+  const info = el(EB.Info, cat([elUint(EB.TimecodeScale, ix.scale), elStr(EB.MuxingApp, 'ScreenDVR'),
+                                elStr(EB.WritingApp, 'ScreenDVR'), elFloat(EB.Duration, last + frame)]));
+  const tracksLen = ix.tracks[1] - ix.tracks[0];
+  const heads = clusters.map(c => { const t = elUint(EB.Timecode, c.tc); return cat([idB(EB.Cluster), sizeB(t.length + c.len), t]); });
+  const seek = (id, p) => el(EB.Seek, cat([el(EB.SeekID, idB(id)), elUint(EB.SeekPosition, p, 8)]));
+  const seekHead = (pi, pt, pc) => el(EB.SeekHead, cat([seek(EB.Info, pi), seek(EB.Tracks, pt), seek(EB.Cues, pc)]));
+  const posInfo = seekHead(0, 0, 0).length, posTracks = posInfo + info.length;
+  let p = posTracks + tracksLen;
+  const cuePts = [];
+  clusters.forEach((c, i) => {
+    if (c.key || i === 0) cuePts.push(el(EB.CuePoint, cat([elUint(EB.CueTime, c.tc),
+      el(EB.CueTrackPositions, cat([elUint(EB.CueTrack, vt || ix.audio || 1), elUint(EB.CueClusterPosition, p)]))])));
+    p += heads[i].length + c.len;
+  });
+  const cues = el(EB.Cues, cat(cuePts));
+  let parts = [blob.slice(0, ix.ebmlEnd), idB(EB.Segment), sizeB(p + cues.length),
+               seekHead(posInfo, posTracks, p), info, blob.slice(ix.tracks[0], ix.tracks[1])];
+  clusters.forEach((c, i) => { parts.push(heads[i]); for (const x of c.parts) parts.push(x); });
+  parts.push(cues);
+  return { blob: new Blob(parts, { type: 'video/webm' }), offset: K, seconds: (last + frame) * ix.scale / 1e9 };
+}
+
+/* ---------- Trim editor ---------- */
+const E = { id:null, rec:null, blob:null, ix:null, base:0, kfs:[], dur:0, start:0, end:0,
+            busy:false, realtime:false, abort:false, previewEnd:null, token:0, ctx:null, srcNode:null };
+const ev = $('edVideo'), tl = $('tl');
+const fmtP = s => { const t = Math.round((s || 0) * 10) / 10; return fmt(t) + '.' + Math.round((t % 1) * 10); };
+const pct = t => (E.dur ? Math.max(0, Math.min(100, t / E.dur * 100)) : 0) + '%';
+const toTick = s => E.base + Math.round(s * 1e9 / E.ix.scale);
+function prevKf(t){ if (!E.kfs) return t; let k = 0; for (const x of E.kfs){ if (x <= t + 0.02) k = x; else break; } return k; }
+const quickOK = t => !!E.ix && (t - prevKf(t)) <= 1.5;
+function snapStart(){ if (quickOK(E.start)) E.start = prevKf(E.start); }
+
+function setSrc(video, blob){
+  if (video._url) URL.revokeObjectURL(video._url);
+  video.srcObject = null;
+  video._url = URL.createObjectURL(blob);
+  video.src = video._url;
+}
+function setBusy(text, p, compact){
+  const b = $('edBusy');
+  E.busy = text != null;
+  ['edSave', 'edReplace'].forEach(id => $(id).disabled = E.busy);
+  if (!E.busy){ b.classList.add('hidden'); return; }
+  b.classList.remove('hidden');
+  b.classList.toggle('compact', !!compact);
+  $('edAbort').classList.toggle('hidden', !compact);
+  $('edBusyText').textContent = text;
+  $('edBar').style.width = Math.round(Math.max(0, Math.min(1, p || 0)) * 100) + '%';
+}
+
+async function openEditor(id){
+  const r = await getRec(id); if (!r) return;
+  const token = ++E.token;
+  Object.assign(E, { id, rec: r, ix: null, kfs: [], base: 0, dur: 0, start: 0, end: 0, abort: false, realtime: false, previewEnd: null });
+  $('edTitle').textContent = r.title;
+  $('tlMarks').innerHTML = ''; $('edSummary').textContent = ''; $('edNote').textContent = '';
+  const c = $('tlStrip'); c.getContext('2d').clearRect(0, 0, c.width, c.height);
+  $('editor').classList.remove('hidden');
+  setBusy('Analyzing recording…', 0);
+  E.blob = await buildBlob(id, r.mime);
+  let src = E.blob;
+  try {
+    E.ix = await indexWebM(E.blob, p => { if (token === E.token) setBusy('Analyzing recording…', p); });
+    const full = remux(E.blob, E.ix, 0, Infinity); // also gives the preview instant seeking
+    E.base = full.offset; src = full.blob;
+    E.kfs = E.ix.video
+      ? E.ix.blocks.filter(b => b.track === E.ix.video && b.key && b.t >= E.base).map(b => (b.t - E.base) * E.ix.scale / 1e9)
+      : null;
+  } catch (err){ console.warn('Quick trim unavailable:', err); E.ix = null; }
+  if (token !== E.token) return;
+  setSrc(ev, src);
+  await once(ev, 'loadedmetadata');
+  await fixDuration(ev);
+  if (token !== E.token) return;
+  E.dur = ev.duration; E.end = E.dur;
+  ev.currentTime = 0;
+  setBusy(null);
+  $('tlMarks').innerHTML = (r.marks || []).filter(m => m.t <= E.dur)
+    .map(m => `<div class="tl-mark" style="left:${pct(m.t)}"></div>`).join('');
+  layoutTimeline();
+  requestAnimationFrame(() => edLoop(token));
+  drawFilmstrip(src, token);
+}
+
+function closeEditor(){
+  if (E.realtime){ E.abort = true; return; } // stop the re-record first
+  E.token++;
+  setBusy(null);
+  ev.pause();
+  if (ev._url){ URL.revokeObjectURL(ev._url); ev._url = null; }
+  ev.removeAttribute('src'); ev.load();
+  E.blob = null; E.ix = null; E.kfs = [];
+  $('editor').classList.add('hidden');
+}
+
+function edLoop(token){
+  if (token !== E.token) return;
+  if (E.previewEnd !== null && ev.currentTime >= E.previewEnd){ ev.pause(); E.previewEnd = null; }
+  $('tlHead').style.left = pct(ev.currentTime);
+  $('edTime').textContent = fmtP(ev.currentTime) + ' / ' + fmt(E.dur);
+  requestAnimationFrame(() => edLoop(token));
+}
+
+function layoutTimeline(){
+  $('hStart').style.left = pct(E.start);
+  $('hEnd').style.left = pct(E.end);
+  $('tlSel').style.left = pct(E.start);
+  $('tlSel').style.width = (E.dur ? (E.end - E.start) / E.dur * 100 : 0) + '%';
+  $('tlDimL').style.left = '0'; $('tlDimL').style.width = pct(E.start);
+  $('tlDimR').style.left = pct(E.end); $('tlDimR').style.right = '0';
+  $('edSummary').textContent = `Keep ${fmtP(E.start)} → ${fmtP(E.end)} · new length ${fmt(E.end - E.start)}`;
+  const n = $('edNote'), len = fmt(E.end - E.start);
+  if (!E.ix) n.textContent = `Saving will replay the kept part in real time to re-record it (about ${len}).`;
+  else if (quickOK(E.start)) n.textContent = 'Quick trim: saves instantly, with no loss of quality.';
+  else n.innerHTML = `This older recording has few clean cut points, so an exact start means replaying the kept part in real time to re-record it (about ${len}).`
+                   + `<button data-e="snap">Start at ${fmtP(prevKf(E.start))} instead (instant)</button>`;
+}
+
+async function drawFilmstrip(src, token){
+  const c = $('tlStrip'), r = tl.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  c.width = Math.max(1, Math.round(r.width * dpr)); c.height = Math.max(1, Math.round(r.height * dpr));
+  const g = c.getContext('2d');
+  g.fillStyle = '#111'; g.fillRect(0, 0, c.width, c.height);
+  const v = document.createElement('video');
+  v.muted = true; v.preload = 'auto';
+  const url = URL.createObjectURL(src); v.src = url;
+  try {
+    await Promise.race([once(v, 'loadedmetadata'), sleep(5000)]);
+    if (!v.videoWidth) return;
+    await fixDuration(v);
+    const tileH = c.height, tileW = Math.max(8, Math.round(tileH * v.videoWidth / v.videoHeight));
+    const n = Math.ceil(c.width / tileW);
+    for (let i = 0; i < n; i++){
+      if (token !== E.token) return;
+      v.currentTime = Math.min(E.dur - 0.05, ((i + 0.5) * tileW / c.width) * E.dur);
+      await Promise.race([once(v, 'seeked'), sleep(3000)]);
+      g.drawImage(v, i * tileW, 0, tileW, tileH);
+      g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(i * tileW, 0, 1, tileH);
+    }
+  } catch (e){ /* the filmstrip is a nicety; trimming works without it */ }
+  finally { URL.revokeObjectURL(url); v.removeAttribute('src'); v.load(); }
+}
+
+// Fallback for recordings without nearby keyframes: replay the kept part and record it again.
+async function recordRealtime(start, end){
+  E.realtime = true; E.abort = false;
+  ev.pause(); ev.playbackRate = 1; ev.muted = false;
+  ev.currentTime = start;
+  await Promise.race([once(ev, 'seeked'), sleep(3000)]);
+  const vTrack = ev.captureStream().getVideoTracks()[0];
+  const tracks = [vTrack];
+  let dest = null;
+  if (!E.ix || E.ix.audio){
+    if (!E.ctx){ E.ctx = new AudioContext(); E.srcNode = E.ctx.createMediaElementSource(ev); E.srcNode.connect(E.ctx.destination); }
+    await E.ctx.resume();
+    dest = E.ctx.createMediaStreamDestination();
+    E.srcNode.connect(dest);
+    tracks.push(dest.stream.getAudioTracks()[0]);
+  }
+  const mime = pickMime();
+  const mr = new MediaRecorder(new MediaStream(tracks), { mimeType: mime || undefined,
+    videoBitsPerSecond: E.rec.bitrate || 4000000, videoKeyFrameIntervalDuration: 1000 });
+  const chunks = [];
+  mr.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  const stopped = once(mr, 'stop');
+  mr.start(1000);
+  await ev.play();
+  await new Promise(res => {
+    const check = () => {
+      const done = ev.currentTime - start;
+      setBusy(`Re-recording the kept part… ${fmt(done)} of ${fmt(end - start)}`, done / (end - start), true);
+      if (E.abort || ev.currentTime >= end || ev.ended){ clearInterval(iv); res(); }
+    };
+    const iv = setInterval(check, 100);
+  });
+  ev.pause(); mr.stop(); await stopped;
+  vTrack.stop();
+  if (dest) E.srcNode.disconnect(dest);
+  E.realtime = false;
+  if (E.abort){ E.abort = false; return null; }
+  return new Blob(chunks, { type: mime || 'video/webm' });
+}
+
+async function grabThumb(t){
+  try {
+    ev.currentTime = t;
+    await Promise.race([once(ev, 'seeked'), sleep(2000)]);
+    if (!ev.videoWidth) return '';
+    const c = document.createElement('canvas');
+    c.width = 320; c.height = Math.round(320 * ev.videoHeight / ev.videoWidth);
+    c.getContext('2d').drawImage(ev, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.6);
+  } catch (e){ return ''; }
+}
+
+async function saveTrim(replace){
+  const r = E.rec, token = E.token;
+  if (!r || E.end - E.start < 0.5) return;
+  if (replace && !confirm('Replace the original with the trimmed version?\n\nThe parts you cut will be permanently removed.')) return;
+  ev.pause(); E.previewEnd = null;
+  let blob, start = E.start, mime = 'video/webm';
+  try {
+    if (quickOK(E.start)){
+      setBusy('Saving…', 0.5);
+      await yieldUI();
+      const out = remux(E.blob, E.ix, toTick(E.start), toTick(E.end));
+      blob = out.blob;
+      start = (out.offset - E.base) * E.ix.scale / 1e9;
+    } else {
+      blob = await recordRealtime(E.start, E.end);
+      if (!blob){ setBusy(null); return; } // stopped by user
+      mime = blob.type;
+      setBusy('Saving…', 1);
+      try { blob = remux(blob, await indexWebM(blob), 0, Infinity).blob; mime = 'video/webm'; } catch (e){}
+    }
+    const thumb = await grabThumb(start);
+    const id = 'r' + Date.now();
+    await tx('chunks', 'readwrite', s => s.put({ recId: id, seq: 0, blob }));
+    const marks = (r.marks || []).filter(m => m.t >= start && m.t <= E.end).map(m => ({ t: m.t - start, label: m.label }));
+    await putRec({ id, title: replace ? r.title : r.title + ' (trimmed)', created: replace ? r.created : Date.now(),
+      mime, bitrate: r.bitrate, durationMs: Math.round((E.end - start) * 1000), size: blob.size, marks,
+      status: 'complete', keep: replace ? !!r.keep : false, thumb: thumb || r.thumb || '' });
+    if (replace) await deleteRec(r.id);
+  } catch (err){
+    console.error(err);
+    setBusy(null);
+    alert('Sorry, the trim could not be saved.\n\n' + (err && err.message || err));
+    return;
+  }
+  if (token === E.token) closeEditor();
+  await enforceCap();
+  renderLibrary();
+}
+
+function edAction(a){
+  if (E.busy && a !== 'abort' && a !== 'close') return;
+  switch (a){
+    case 'close': closeEditor(); break;
+    case 'abort': E.abort = true; break;
+    case 'play': if (ev.paused){ E.previewEnd = null; ev.play(); } else ev.pause(); break;
+    case 'in': E.start = Math.max(0, Math.min(ev.currentTime, E.end - 0.5)); snapStart(); layoutTimeline(); break;
+    case 'out': E.end = Math.min(E.dur, Math.max(ev.currentTime, E.start + 0.5)); layoutTimeline(); break;
+    case 'preview': E.previewEnd = E.end; ev.currentTime = E.start; ev.play(); break;
+    case 'snap': E.start = prevKf(E.start); layoutTimeline(); break;
+    case 'saveCopy': saveTrim(false); break;
+    case 'replace': saveTrim(true); break;
+  }
+}
+$('editor').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b && b.dataset.e) edAction(b.dataset.e);
+});
+ev.addEventListener('click', () => edAction('play'));
+ev.addEventListener('play', () => { $('edPlay').textContent = '⏸'; });
+ev.addEventListener('pause', () => { $('edPlay').textContent = '▶'; });
+
+let drag = null;
+function timeAt(e){ const r = tl.getBoundingClientRect(); return Math.max(0, Math.min(E.dur, (e.clientX - r.left) / r.width * E.dur)); }
+function dragMove(e){
+  const t = timeAt(e);
+  if (drag === 'start'){ E.start = Math.min(t, E.end - 0.5); ev.currentTime = E.start; }
+  else if (drag === 'end'){ E.end = Math.max(t, E.start + 0.5); ev.currentTime = E.end; }
+  else ev.currentTime = t;
+  layoutTimeline();
+}
+tl.addEventListener('pointerdown', e => {
+  if (E.busy || !E.dur) return;
+  e.preventDefault();
+  drag = e.target.dataset.h || 'seek';
+  E.previewEnd = null;
+  tl.setPointerCapture(e.pointerId);
+  dragMove(e);
+});
+tl.addEventListener('pointermove', e => { if (drag) dragMove(e); });
+const endDrag = () => {
+  if (!drag) return;
+  if (drag === 'start'){ snapStart(); ev.currentTime = E.start; }
+  drag = null;
+  layoutTimeline();
+};
+tl.addEventListener('pointerup', endDrag);
+tl.addEventListener('pointercancel', endDrag);
 
 /* ---------- Keyboard ---------- */
 document.addEventListener('keydown', e => {
   if (e.target.matches('input,select,textarea')) return;
   const k = e.key.toLowerCase();
+  if (!$('editor').classList.contains('hidden')){
+    const acts = { ' ':'play', i:'in', o:'out', p:'preview', escape:'close' };
+    const steps = { arrowleft:-1, arrowright:1, j:-10, l:10 };
+    if (acts[k]){ e.preventDefault(); edAction(acts[k]); }
+    else if (steps[k] && !E.busy){ e.preventDefault(); ev.currentTime = Math.max(0, Math.min(E.dur, ev.currentTime + steps[k])); }
+    return;
+  }
   if (!$('player').classList.contains('hidden')){
     if (k === 'escape') closePlayer();
     else if (k === ' ' && e.target !== pv){ e.preventDefault(); pv.paused ? pv.play() : pv.pause(); }
