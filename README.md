@@ -10,7 +10,7 @@ A browser-based screen recorder that works like a TV DVR: record whatever is on 
 - Bookmarks (marks) to jump back to key moments
 - Library with thumbnails: play, rename, pin, download (.webm), delete
 - Playback at 0.5×–2× speed
-- **Trim editor**: drag start/end handles on a filmstrip timeline (or press I / O), preview, then save as a new copy or replace the original. Trims are instant and lossless; recordings made before v1.1.0 may need a short real-time re-record for an exact start.
+- **Editor** with two modes — *Keep selection* (trim the ends) and *Cut out selection* (remove a middle section and join the rest). Drag start/end handles on a filmstrip timeline (or press I / O), preview, then save as a new copy or replace the original. Trims are instant and lossless; recordings made before v1.1.0 may need a short real-time re-record for an exact start.
 - Auto-stop timer and storage cap (oldest unpinned recordings removed first)
 - Recovers footage if the tab closes mid-recording
 

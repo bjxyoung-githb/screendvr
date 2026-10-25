@@ -78,6 +78,13 @@
   .tl-head{position:absolute;top:-7px;bottom:-7px;width:2px;margin-left:-1px;background:#fff;box-shadow:0 0 3px #000;pointer-events:none;z-index:3}
   .tl-mark{position:absolute;bottom:3px;width:3px;height:14px;margin-left:-1px;background:var(--accent);border-radius:1px;pointer-events:none;z-index:1}
   .ed-controls{margin-top:10px}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{border:0;border-radius:0;background:var(--panel2)}
+  .seg button+button{border-left:1px solid var(--line)}
+  .seg button.on{background:var(--accent);color:#fff;font-weight:600}
+  .timeline.cut .tl-dim{display:none}
+  .timeline.cut .tl-sel{background:repeating-linear-gradient(45deg,rgba(255,77,79,.6) 0 8px,rgba(255,77,79,.3) 8px 16px);border-color:var(--rec)}
+  .timeline.cut .tl-handle{background:var(--rec)}
   .note button{font-size:12px;padding:3px 8px;margin-left:4px}
   @media (max-width:600px){ main{padding:10px} section{padding:12px} }
 </style>
@@ -190,7 +197,11 @@
 <div class="modal hidden" id="editor">
   <div class="box">
     <div class="row" style="margin-bottom:10px">
-      <strong style="flex:1">✂ Trim: <span id="edTitle"></span></strong>
+      <strong style="flex:1">✂ Edit: <span id="edTitle"></span></strong>
+      <div class="seg" role="group" aria-label="Edit mode">
+        <button data-e="modeKeep" id="mKeep" class="on" title="Keep only the part between the handles">Keep selection</button>
+        <button data-e="modeCut" id="mCut" title="Remove the part between the handles and join the rest">Cut out selection</button>
+      </div>
       <button data-e="close">✕ Cancel</button>
     </div>
     <div class="ed-video-wrap">
@@ -216,12 +227,12 @@
       <span class="stat" id="edTime">0:00.0 / 0:00</span>
       <button data-e="in" title="Set start at the playhead (I)">[ Set start</button>
       <button data-e="out" title="Set end at the playhead (O)">Set end ]</button>
-      <button data-e="preview" title="Play just the kept part (P)">▶ Preview trim</button>
+      <button data-e="preview" title="Preview the result (P)">▶ Preview</button>
       <span class="spacer"></span>
       <span class="stat" id="edSummary"></span>
     </div>
     <p class="note" id="edNote"></p>
-    <p class="note">Drag the yellow handles, or play to a spot and press <kbd>I</kbd> (start) / <kbd>O</kbd> (end). Click the strip to jump. <kbd>←</kbd>/<kbd>→</kbd> 1 s · <kbd>J</kbd>/<kbd>L</kbd> 10 s</p>
+    <p class="note">Drag the handles, or play to a spot and press <kbd>I</kbd> (start) / <kbd>O</kbd> (end). Click the strip to jump. <kbd>←</kbd>/<kbd>→</kbd> 1 s · <kbd>J</kbd>/<kbd>L</kbd> 10 s</p>
     <div class="row" style="justify-content:flex-end;margin-top:8px">
       <button data-e="replace" id="edReplace">Replace original</button>
       <button class="primary" data-e="saveCopy" id="edSave">Save as new copy</button>
@@ -230,7 +241,7 @@
 </div>
 
 <script>
-const BUILD_VERSION = '1.1.0';
+const BUILD_VERSION = '1.2.0';
 document.getElementById('ver').textContent = 'v' + BUILD_VERSION;
 
 const $ = id => document.getElementById(id);
@@ -757,35 +768,45 @@ const elUint = (id, n, len) => el(id, uintB(n, len));
 const elStr = (id, s) => el(id, new TextEncoder().encode(s));
 function elFloat(id, f){ const o = new Uint8Array(8); new DataView(o.buffer).setFloat64(0, f); return el(id, o); }
 
-/* Copy the frames from fromTick..toTick into a new WebM. The start moves back to the
-   nearest video keyframe so the file plays cleanly. Returns the new blob and the real start. */
-function remux(blob, ix, fromTick, toTick){
-  const vt = ix.video, B = ix.blocks;
-  let K = fromTick;
-  if (vt){
-    let k = null;
-    for (const b of B){
-      if (b.track !== vt || !b.key) continue;
-      if (b.t <= fromTick) k = b.t; else { if (k === null) k = b.t; break; }
-    }
-    if (k !== null) K = k;
+/* Copy the frames inside each [fromTick, toTick) range into one new WebM, joining the
+   ranges end to end. Each range starts on a video keyframe so the file plays cleanly. */
+function keyAtOrBefore(ix, tick){
+  const vt = ix.video;
+  if (!vt) return tick;
+  let k = null;
+  for (const b of ix.blocks){
+    if (b.track !== vt || !b.key) continue;
+    if (b.t <= tick) k = b.t; else { if (k === null) k = b.t; break; }
   }
+  return k === null ? tick : k;
+}
+function remux(blob, ix, ranges){
+  const vt = ix.video, B = ix.blocks;
   const frame = Math.max(1, Math.round(33.3e6 / ix.scale));
   const clusters = [];
-  let cur = null, last = 0, seenKey = !vt;
-  for (const b of B){
-    if (b.t < K || b.t >= toTick) continue;
-    if (b.track === vt && !seenKey){ if (!b.key) continue; seenKey = true; }
-    const nt = b.t - K;
-    const vkey = b.track === vt && b.key;
-    if (!cur || vkey || nt - cur.tc > 30000 || nt - cur.tc < -30000){
-      cur = { tc: Math.max(0, nt), parts: [], len: 0, key: vkey };
-      clusters.push(cur);
+  let cur = null, last = 0, outPos = 0, firstK = null, lastV = -Infinity;
+  for (const [from, to] of ranges){
+    const K = keyAtOrBefore(ix, from);
+    if (firstK === null) firstK = K;
+    let seenKey = !vt, rangeLast = K;
+    for (const b of B){
+      if (b.t < K || b.t >= to) continue;
+      if (b.track === vt && !seenKey){ if (!b.key) continue; seenKey = true; }
+      const nt = b.t - K + outPos;
+      const vkey = b.track === vt && b.key;
+      if (!cur || vkey || nt - cur.tc > 30000 || nt - cur.tc < -30000){
+        cur = { tc: Math.max(0, nt), parts: [], len: 0, key: vkey };
+        clusters.push(cur);
+      }
+      const rel = nt - cur.tc;
+      cur.parts.push(blob.slice(b.s, b.tc), new Uint8Array([(rel >> 8) & 0xFF, rel & 0xFF]), blob.slice(b.tc + 2, b.e));
+      cur.len += b.e - b.s;
+      if (nt > last) last = nt;
+      if (b.track === vt && nt > lastV) lastV = nt;
+      if (b.t > rangeLast) rangeLast = b.t;
     }
-    const rel = nt - cur.tc;
-    cur.parts.push(blob.slice(b.s, b.tc), new Uint8Array([(rel >> 8) & 0xFF, rel & 0xFF]), blob.slice(b.tc + 2, b.e));
-    cur.len += b.e - b.s;
-    if (nt > last) last = nt;
+    // next piece starts where this one ends, never on top of its last video frame
+    outPos = Math.max(outPos + (isFinite(to) ? to : rangeLast + frame) - K, lastV + frame);
   }
   if (!clusters.length) throw new Error('Nothing to keep in that range');
 
@@ -808,12 +829,12 @@ function remux(blob, ix, fromTick, toTick){
                seekHead(posInfo, posTracks, p), info, blob.slice(ix.tracks[0], ix.tracks[1])];
   clusters.forEach((c, i) => { parts.push(heads[i]); for (const x of c.parts) parts.push(x); });
   parts.push(cues);
-  return { blob: new Blob(parts, { type: 'video/webm' }), offset: K, seconds: (last + frame) * ix.scale / 1e9 };
+  return { blob: new Blob(parts, { type: 'video/webm' }), offset: firstK, seconds: (last + frame) * ix.scale / 1e9 };
 }
 
 /* ---------- Trim editor ---------- */
 const E = { id:null, rec:null, blob:null, ix:null, base:0, kfs:[], dur:0, start:0, end:0,
-            busy:false, realtime:false, abort:false, previewEnd:null, token:0, ctx:null, srcNode:null };
+            mode:'keep', busy:false, realtime:false, abort:false, preview:null, token:0, ctx:null, srcNode:null };
 const ev = $('edVideo'), tl = $('tl');
 const fmtP = s => { const t = Math.round((s || 0) * 10) / 10; return fmt(t) + '.' + Math.round((t % 1) * 10); };
 const pct = t => (E.dur ? Math.max(0, Math.min(100, t / E.dur * 100)) : 0) + '%';
@@ -821,6 +842,23 @@ const toTick = s => E.base + Math.round(s * 1e9 / E.ix.scale);
 function prevKf(t){ if (!E.kfs) return t; let k = 0; for (const x of E.kfs){ if (x <= t + 0.02) k = x; else break; } return k; }
 const quickOK = t => !!E.ix && (t - prevKf(t)) <= 1.5;
 function snapStart(){ if (quickOK(E.start)) E.start = prevKf(E.start); }
+// Cut-out mode: the start of the cut is exact; its end lines up with the nearest keyframe.
+function snapEnd(){
+  if (!E.ix || !E.kfs) return;
+  if (E.end >= E.dur - 0.05){ E.end = E.dur; return; }
+  let best = null;
+  for (const x of E.kfs) if (x > E.start + 0.2 && (best === null || Math.abs(x - E.end) < Math.abs(best - E.end))) best = x;
+  E.end = best === null ? E.dur : best;
+}
+function snapSel(){ if (E.mode === 'cut') snapEnd(); else snapStart(); }
+function setMode(m){
+  if (m === 'cut' && !E.ix) return;
+  E.mode = m;
+  if (m === 'cut' && E.start <= 0.05 && E.end >= E.dur - 0.05){ E.start = E.dur * 0.4; E.end = E.dur * 0.6; }
+  snapSel();
+  ev.currentTime = E.start;
+  layoutTimeline();
+}
 
 function setSrc(video, blob){
   if (video._url) URL.revokeObjectURL(video._url);
@@ -843,7 +881,7 @@ function setBusy(text, p, compact){
 async function openEditor(id){
   const r = await getRec(id); if (!r) return;
   const token = ++E.token;
-  Object.assign(E, { id, rec: r, ix: null, kfs: [], base: 0, dur: 0, start: 0, end: 0, abort: false, realtime: false, previewEnd: null });
+  Object.assign(E, { id, rec: r, ix: null, kfs: [], base: 0, dur: 0, start: 0, end: 0, abort: false, realtime: false, preview: null, mode: 'keep' });
   $('edTitle').textContent = r.title;
   $('tlMarks').innerHTML = ''; $('edSummary').textContent = ''; $('edNote').textContent = '';
   const c = $('tlStrip'); c.getContext('2d').clearRect(0, 0, c.width, c.height);
@@ -853,7 +891,7 @@ async function openEditor(id){
   let src = E.blob;
   try {
     E.ix = await indexWebM(E.blob, p => { if (token === E.token) setBusy('Analyzing recording…', p); });
-    const full = remux(E.blob, E.ix, 0, Infinity); // also gives the preview instant seeking
+    const full = remux(E.blob, E.ix, [[0, Infinity]]); // also gives the preview instant seeking
     E.base = full.offset; src = full.blob;
     E.kfs = E.ix.video
       ? E.ix.blocks.filter(b => b.track === E.ix.video && b.key && b.t >= E.base).map(b => (b.t - E.base) * E.ix.scale / 1e9)
@@ -887,7 +925,11 @@ function closeEditor(){
 
 function edLoop(token){
   if (token !== E.token) return;
-  if (E.previewEnd !== null && ev.currentTime >= E.previewEnd){ ev.pause(); E.previewEnd = null; }
+  const P = E.preview;
+  if (P){
+    if (P.skipAt != null && ev.currentTime >= P.skipAt){ ev.currentTime = P.skipTo; P.skipAt = null; }
+    else if (P.skipAt == null && (ev.currentTime >= P.stopAt || ev.ended)){ ev.pause(); E.preview = null; }
+  }
   $('tlHead').style.left = pct(ev.currentTime);
   $('edTime').textContent = fmtP(ev.currentTime) + ' / ' + fmt(E.dur);
   requestAnimationFrame(() => edLoop(token));
@@ -900,12 +942,21 @@ function layoutTimeline(){
   $('tlSel').style.width = (E.dur ? (E.end - E.start) / E.dur * 100 : 0) + '%';
   $('tlDimL').style.left = '0'; $('tlDimL').style.width = pct(E.start);
   $('tlDimR').style.left = pct(E.end); $('tlDimR').style.right = '0';
-  $('edSummary').textContent = `Keep ${fmtP(E.start)} → ${fmtP(E.end)} · new length ${fmt(E.end - E.start)}`;
-  const n = $('edNote'), len = fmt(E.end - E.start);
-  if (!E.ix) n.textContent = `Saving will replay the kept part in real time to re-record it (about ${len}).`;
-  else if (quickOK(E.start)) n.textContent = 'Quick trim: saves instantly, with no loss of quality.';
-  else n.innerHTML = `This older recording has few clean cut points, so an exact start means replaying the kept part in real time to re-record it (about ${len}).`
-                   + `<button data-e="snap">Start at ${fmtP(prevKf(E.start))} instead (instant)</button>`;
+  const len = E.end - E.start, cut = E.mode === 'cut', n = $('edNote');
+  tl.classList.toggle('cut', cut);
+  $('mKeep').classList.toggle('on', !cut); $('mCut').classList.toggle('on', cut);
+  $('mCut').disabled = !E.ix;
+  $('mCut').title = E.ix ? 'Remove the part between the handles and join the rest' : 'Not available for this recording';
+  if (cut){
+    $('edSummary').textContent = `Cut out ${fmtP(E.start)} → ${fmtP(E.end)} (${fmtP(len)}) · new length ${fmt(E.dur - len)}`;
+    n.textContent = 'Quick cut: saves instantly, with no loss of quality. The end of the cut lines up with the nearest clean cut point.';
+  } else {
+    $('edSummary').textContent = `Keep ${fmtP(E.start)} → ${fmtP(E.end)} · new length ${fmt(len)}`;
+    if (!E.ix) n.textContent = `Saving will replay the kept part in real time to re-record it (about ${fmt(len)}).`;
+    else if (quickOK(E.start)) n.textContent = 'Quick trim: saves instantly, with no loss of quality.';
+    else n.innerHTML = `This older recording has few clean cut points, so an exact start means replaying the kept part in real time to re-record it (about ${fmt(len)}).`
+                     + `<button data-e="snap">Start at ${fmtP(prevKf(E.start))} instead (instant)</button>`;
+  }
 }
 
 async function drawFilmstrip(src, token){
@@ -986,37 +1037,54 @@ async function grabThumb(t){
 }
 
 async function saveTrim(replace){
-  const r = E.rec, token = E.token;
+  const r = E.rec, token = E.token, cutMode = E.mode === 'cut';
   if (!r || E.end - E.start < 0.5) return;
-  if (replace && !confirm('Replace the original with the trimmed version?\n\nThe parts you cut will be permanently removed.')) return;
-  ev.pause(); E.previewEnd = null;
-  let blob, start = E.start, mime = 'video/webm';
+  if (replace && !confirm('Replace the original with the edited version?\n\nThe parts you removed will be gone for good.')) return;
+  ev.pause(); E.preview = null;
+  let blob, mime = 'video/webm', thumbAt, newDur, marks;
+  const oldMarks = r.marks || [];
   try {
-    if (quickOK(E.start)){
+    if (cutMode){
       setBusy('Saving…', 0.5);
       await yieldUI();
-      const out = remux(E.blob, E.ix, toTick(E.start), toTick(E.end));
-      blob = out.blob;
-      start = (out.offset - E.base) * E.ix.scale / 1e9;
+      const a = E.start, b = E.end, ranges = [];
+      if (a > 0.05) ranges.push([E.base, toTick(a)]);
+      if (b < E.dur - 0.05) ranges.push([toTick(b), Infinity]);
+      if (!ranges.length) throw new Error('That would remove the whole recording.');
+      blob = remux(E.blob, E.ix, ranges).blob;
+      thumbAt = a > 0.05 ? 0 : b;
+      newDur = E.dur - (b - a);
+      marks = oldMarks.filter(m => m.t < a || m.t >= b).map(m => ({ t: m.t < a ? m.t : m.t - (b - a), label: m.label }));
     } else {
-      blob = await recordRealtime(E.start, E.end);
-      if (!blob){ setBusy(null); return; } // stopped by user
-      mime = blob.type;
-      setBusy('Saving…', 1);
-      try { blob = remux(blob, await indexWebM(blob), 0, Infinity).blob; mime = 'video/webm'; } catch (e){}
+      let start = E.start;
+      if (quickOK(E.start)){
+        setBusy('Saving…', 0.5);
+        await yieldUI();
+        const out = remux(E.blob, E.ix, [[toTick(E.start), toTick(E.end)]]);
+        blob = out.blob;
+        start = (out.offset - E.base) * E.ix.scale / 1e9;
+      } else {
+        blob = await recordRealtime(E.start, E.end);
+        if (!blob){ setBusy(null); return; } // stopped by user
+        mime = blob.type;
+        setBusy('Saving…', 1);
+        try { blob = remux(blob, await indexWebM(blob), [[0, Infinity]]).blob; mime = 'video/webm'; } catch (e){}
+      }
+      thumbAt = start;
+      newDur = E.end - start;
+      marks = oldMarks.filter(m => m.t >= start && m.t <= E.end).map(m => ({ t: m.t - start, label: m.label }));
     }
-    const thumb = await grabThumb(start);
+    const thumb = await grabThumb(thumbAt);
     const id = 'r' + Date.now();
     await tx('chunks', 'readwrite', s => s.put({ recId: id, seq: 0, blob }));
-    const marks = (r.marks || []).filter(m => m.t >= start && m.t <= E.end).map(m => ({ t: m.t - start, label: m.label }));
-    await putRec({ id, title: replace ? r.title : r.title + ' (trimmed)', created: replace ? r.created : Date.now(),
-      mime, bitrate: r.bitrate, durationMs: Math.round((E.end - start) * 1000), size: blob.size, marks,
-      status: 'complete', keep: replace ? !!r.keep : false, thumb: thumb || r.thumb || '' });
+    await putRec({ id, title: replace ? r.title : r.title + (cutMode ? ' (edited)' : ' (trimmed)'),
+      created: replace ? r.created : Date.now(), mime, bitrate: r.bitrate, durationMs: Math.round(newDur * 1000),
+      size: blob.size, marks, status: 'complete', keep: replace ? !!r.keep : false, thumb: thumb || r.thumb || '' });
     if (replace) await deleteRec(r.id);
   } catch (err){
     console.error(err);
     setBusy(null);
-    alert('Sorry, the trim could not be saved.\n\n' + (err && err.message || err));
+    alert('Sorry, the edit could not be saved.\n\n' + (err && err.message || err));
     return;
   }
   if (token === E.token) closeEditor();
@@ -1029,11 +1097,21 @@ function edAction(a){
   switch (a){
     case 'close': closeEditor(); break;
     case 'abort': E.abort = true; break;
-    case 'play': if (ev.paused){ E.previewEnd = null; ev.play(); } else ev.pause(); break;
-    case 'in': E.start = Math.max(0, Math.min(ev.currentTime, E.end - 0.5)); snapStart(); layoutTimeline(); break;
-    case 'out': E.end = Math.min(E.dur, Math.max(ev.currentTime, E.start + 0.5)); layoutTimeline(); break;
-    case 'preview': E.previewEnd = E.end; ev.currentTime = E.start; ev.play(); break;
+    case 'play': if (ev.paused){ E.preview = null; ev.play(); } else ev.pause(); break;
+    case 'in': E.start = Math.max(0, Math.min(ev.currentTime, E.end - 0.5)); snapSel(); layoutTimeline(); break;
+    case 'out': E.end = Math.min(E.dur, Math.max(ev.currentTime, E.start + 0.5)); snapSel(); layoutTimeline(); break;
+    case 'preview':
+      if (E.mode === 'cut'){ // play up to the cut, jump over it, play a few seconds after
+        E.preview = { skipAt: E.start, skipTo: E.end, stopAt: Math.min(E.dur, E.end + 3) };
+        ev.currentTime = Math.max(0, E.start - 3);
+      } else {
+        E.preview = { skipAt: null, stopAt: E.end };
+        ev.currentTime = E.start;
+      }
+      ev.play(); break;
     case 'snap': E.start = prevKf(E.start); layoutTimeline(); break;
+    case 'modeKeep': setMode('keep'); break;
+    case 'modeCut': setMode('cut'); break;
     case 'saveCopy': saveTrim(false); break;
     case 'replace': saveTrim(true); break;
   }
@@ -1059,14 +1137,14 @@ tl.addEventListener('pointerdown', e => {
   if (E.busy || !E.dur) return;
   e.preventDefault();
   drag = e.target.dataset.h || 'seek';
-  E.previewEnd = null;
+  E.preview = null;
   tl.setPointerCapture(e.pointerId);
   dragMove(e);
 });
 tl.addEventListener('pointermove', e => { if (drag) dragMove(e); });
 const endDrag = () => {
   if (!drag) return;
-  if (drag === 'start'){ snapStart(); ev.currentTime = E.start; }
+  if (drag === 'start' || drag === 'end'){ snapSel(); ev.currentTime = drag === 'start' ? E.start : E.end; }
   drag = null;
   layoutTimeline();
 };
